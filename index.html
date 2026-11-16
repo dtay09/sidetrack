@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sidetrack</title>
+<meta name="description" content="Find new artists by hopping from one similar artist to the next. Play 30-second snippets and save what you like.">
+<meta name="theme-color" content="#f4f1ea" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121110" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Sidetrack">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=Instrument+Sans:wght@400..700&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="top">
+  <a class="brand" href="#/" aria-label="Sidetrack home">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 22 16 9l9 12" fill="none" stroke="var(--accent)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><circle cx="7" cy="22" r="3.5" fill="currentColor"/><circle cx="25" cy="21" r="3.5" fill="currentColor"/><circle cx="16" cy="9" r="5" fill="var(--accent)"/></svg>
+    <span>Sidetrack</span>
+  </a>
+
+  <div class="search" role="search">
+    <svg class="search__icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="m16 16 4.5 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    <input id="q" type="search" placeholder="Search for an artist" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" aria-label="Search for an artist">
+    <div id="results" class="results" hidden></div>
+  </div>
+
+  <nav class="tabs" aria-label="Main">
+    <a href="#/" data-tab="discover">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="m15.5 8.5-2 5-5 2 2-5z" fill="currentColor"/></svg>
+      <span>Discover</span>
+    </a>
+    <a href="#/map" data-tab="map">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 17 12 7l6 9" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><circle cx="6" cy="17" r="2.6" fill="currentColor"/><circle cx="12" cy="7" r="2.6" fill="currentColor"/><circle cx="18" cy="16" r="2.6" fill="currentColor"/></svg>
+      <span>Map</span>
+    </a>
+    <a href="#/saved" data-tab="saved">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.3s-7.6-4.5-7.6-10.2a4.2 4.2 0 0 1 7.6-2.5 4.2 4.2 0 0 1 7.6 2.5c0 5.700-7.6 10.200-7.6 10.200z" fill="none" stroke="currentColor" stroke-width="1.900" stroke-linejoin="round"/></svg>
+      <span>Saved</span>
+      <b id="savedCount" hidden></b>
+    </a>
+  </nav>
+</header>
+
+<main id="view" tabindex="-1"></main>
+
+<div id="player" class="player" hidden>
+  <img class="player__art" id="pArt" alt="" width="44" height="44">
+  <div class="player__meta">
+    <strong id="pTitle"></strong>
+    <button type="button" id="pArtist" data-action="player-artist" title="Go to this artist"></button>
+  </div>
+  <button type="button" class="iconbtn heart" id="pSave" data-action="player-save" aria-pressed="false" aria-label="Save this song"></button>
+  <button type="button" class="player__toggle" id="pToggle" data-action="player-toggle" aria-label="Play or pause"></button>
+  <button type="button" class="iconbtn" id="pNext" data-action="player-next" aria-label="Next snippet"></button>
+  <div class="player__bar" aria-hidden="true"><i id="pBar"></i></div>
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<dialog id="picker" aria-labelledby="pickTitle">
+  <div class="picker__head">
+    <h2 id="pickTitle">Cross with another artist</h2>
+    <button type="button" class="iconbtn" data-action="close-picker" aria-label="Close"></button>
+  </div>
+  <p class="picker__lede">Pick a second artist and see who sits between the two.</p>
+  <div class="search search--inline">
+    <svg class="search__icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="m16 16 4.5 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    <input id="pq" type="search" placeholder="Search for an artist" autocomplete="off" spellcheck="false" aria-label="Search for a second artist">
+  </div>
+  <div id="pres" class="results results--inline" hidden></div>
+  <div id="pickQuick"></div>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>
