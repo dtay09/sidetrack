@@ -8,9 +8,15 @@ $types = @{
   '.png' = 'image/png'; '.svg' = 'image/svg+xml'; '.ico' = 'image/x-icon'
 }
 
+# Spotify sign-in refuses "localhost" but accepts 127.0.0.1, so listen on both when Windows allows it.
 $listener = New-Object System.Net.HttpListener
 $listener.Prefixes.Add("http://localhost:$Port/")
-$listener.Start()
+$listener.Prefixes.Add("http://127.0.0.1:$Port/")
+try { $listener.Start() } catch {
+  $listener = New-Object System.Net.HttpListener
+  $listener.Prefixes.Add("http://localhost:$Port/")
+  $listener.Start()
+}
 Write-Host "Sidetrack is running at http://localhost:$Port/"
 Write-Host "Keep this window open while you use it. Close it to stop."
 if ($Open) { Start-Process "http://localhost:$Port/" }

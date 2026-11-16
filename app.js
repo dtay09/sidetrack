@@ -21,7 +21,10 @@ const store = {
   },
   set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage full or blocked */ } },
 };
-const K = { saved: 'sidetrack.saved.v1', trail: 'sidetrack.trail.v1', graph: 'sidetrack.graph.v1' };
+const K = {
+  saved: 'sidetrack.saved.v1', trail: 'sidetrack.trail.v1', graph: 'sidetrack.graph.v1',
+  spotify: 'sidetrack.spotify.v1', pkce: 'sidetrack.spotify.pkce', prefs: 'sidetrack.prefs.v1',
+};
 
 /* ================= icons ================= */
 const svg = (name, body) => `<svg class="i i-${name}" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${body}</svg>`;
@@ -36,7 +39,10 @@ const ICONS = {
   blend: svg('blend', '<circle cx="9" cy="12" r="5.5" fill="none" stroke="currentColor" stroke-width="1.9"/><circle cx="15" cy="12" r="5.5" fill="none" stroke="currentColor" stroke-width="1.9"/>'),
   x: svg('x', '<path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M6 6l12 12M18 6 6 18"/>'),
   copy: svg('copy', '<rect x="9" y="9" width="10" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.9"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M15 6V5a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h1"/>'),
-  install: svg('install', '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 4v11m0 0-4-4m4 4 4-4M5 19h14"/>'),
+  more: svg('more', '<circle cx="5.5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="18.5" cy="12" r="1.8" fill="currentColor"/>'),
+  check: svg('check', '<path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="m5 12.5 4.5 4.5L19 7.5"/>'),
+  plus: svg('plus', '<path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M12 5v14M5 12h14"/>'),
+  install: svg('install','<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 4v11m0 0-4-4m4 4 4-4M5 19h14"/>'),
 };
 const ic = name => ICONS[name];
 const PLAYSTATE = ic('play') + ic('pause') + '<span class="spin"></span>';
@@ -156,8 +162,7 @@ function trackRow(t, listId, i, { savedView = false } = {}) {
       <span class="track__art"><img src="${esc(t.cover)}" alt="" loading="lazy" width="48" height="48"><span class="track__state">${PLAYSTATE}</span></span>
       <span class="track__text"><span class="track__title">${esc(t.title)}</span><span class="track__sub">${esc(sub)}</span></span>
     </button>
-    ${savedView ? `<a class="iconbtn" href="#/artist/${t.artist.id}" aria-label="Go to ${esc(t.artist.name)}" title="Go to artist">${ic('artist')}</a>
-    <a class="iconbtn" href="${esc(t.link)}" target="_blank" rel="noopener" aria-label="Open the full song on Deezer" title="Full song on Deezer">${ic('ext')}</a>` : ''}
+    <button class="iconbtn" type="button" data-action="song-menu" data-id="${t.id}" aria-label="Links and options for ${esc(t.title)}" title="Spotify, Apple Music and more">${ic('more')}</button>
     <button class="iconbtn heart" type="button" data-action="save-track" data-id="${t.id}" aria-pressed="${isTrackSaved(t.id)}" aria-label="Save ${esc(t.title)}">${ic('heart')}</button>
   </li>`;
 }
@@ -206,6 +211,7 @@ async function freshen(t, force) {
   const r = await dz('track/' + t.id, {}, { fresh: true });
   t.preview = r.preview || '';
   t.at = Date.now();
+  if (r.isrc) t.isrc = r.isrc;
   const s = saved.tracks.find(x => x.id === t.id);
   if (s) { s.preview = t.preview; s.at = t.at; store.set(K.saved, saved); }
   if (!t.preview) throw new Error('no-preview');
@@ -366,8 +372,10 @@ function toggleSaveTrack(t) {
     const [gone] = saved.tracks.splice(i, 1);
     toast('Removed from saved', { label: 'Undo', run: () => { saved.tracks.splice(i, 0, gone); afterSaveChange(); } });
   } else {
-    saved.tracks.unshift({ ...t, savedAt: Date.now(), via: viaNames(t.artist.id) });
+    const copy = { ...t, savedAt: Date.now(), via: viaNames(t.artist.id) };
+    saved.tracks.unshift(copy);
     toast('Saved for later');
+    autoLike(copy);
   }
   afterSaveChange();
 }
@@ -386,8 +394,12 @@ function toggleSaveArtist(a) {
 
 function afterSaveChange() {
   persistSaved();
+  $$('[data-action="save-track"]').forEach(b => {
+    const on = isTrackSaved(+b.dataset.id);
+    b.setAttribute('aria-pressed', on);
+    const label = $('span', b); if (label) label.textContent = on ? 'Saved' : 'Save for later';
+  });
   if (routeName === 'saved') { renderRoute(); return; }
-  $$('[data-action="save-track"]').forEach(b => b.setAttribute('aria-pressed', isTrackSaved(+b.dataset.id)));
   $$('.btn[data-action="save-artist"]').forEach(b => {
     const on = isArtistSaved(+b.dataset.id);
     b.setAttribute('aria-pressed', on);
@@ -395,6 +407,275 @@ function afterSaveChange() {
   });
   renderPlayer();
 }
+
+/* ================= Spotify + Apple Music ================= */
+// The client ID comes from the Spotify developer dashboard. It is not a secret: sign-in uses PKCE, which needs no password or key in the page.
+const SPOTIFY_CLIENT_ID = '45c7a67141d948eb89815b97d4e5f4ec';
+const SP_SCOPES = 'user-library-modify user-library-read';
+let sp = store.get(K.spotify, null);            // { access, refresh, exp, name }
+let prefs = store.get(K.prefs, { autoLike: true });
+let startupToast = '';
+
+const spRedirect = () => location.origin + location.pathname.replace(/index\.html$/, '');
+const b64url = bytes => btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const randomString = n => { const a = new Uint8Array(n); crypto.getRandomValues(a); return b64url(a).slice(0, n); };
+
+async function spConnect() {
+  if (!SPOTIFY_CLIENT_ID) { toast('Spotify sign-in hasn’t been set up for Sidetrack yet.'); return; }
+  if (location.protocol !== 'https:' && location.hostname !== '127.0.0.1') { toast('Spotify sign-in only works on the live site.'); return; }
+  const verifier = randomString(64), state = randomString(16);
+  const challenge = b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
+  store.set(K.pkce, { verifier, state, back: location.hash || '#/saved' });
+  location.assign('https://accounts.spotify.com/authorize?' + new URLSearchParams({
+    client_id: SPOTIFY_CLIENT_ID, response_type: 'code', redirect_uri: spRedirect(),
+    code_challenge_method: 'S256', code_challenge: challenge, state, scope: SP_SCOPES,
+  }));
+}
+
+async function spToken(body) {
+  const r = await fetch('https://accounts.spotify.com/api/token', {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(body),
+  });
+  if (!r.ok) throw Object.assign(new Error('spotify-token'), { status: r.status });
+  return r.json();
+}
+
+function spStore(t) {
+  sp = { access: t.access_token, refresh: t.refresh_token || (sp && sp.refresh), exp: Date.now() + (t.expires_in - 60) * 1000, name: (sp && sp.name) || '' };
+  store.set(K.spotify, sp);
+}
+
+function spDisconnect() {
+  sp = null;
+  try { localStorage.removeItem(K.spotify); } catch { /* ignore */ }
+}
+
+// Runs once on load: Spotify sends the person back here with ?code=… after they approve.
+async function spFinishSignIn() {
+  const qs = new URLSearchParams(location.search);
+  if (!qs.has('code') && !qs.has('error')) return;
+  const stash = store.get(K.pkce, null);
+  try { localStorage.removeItem(K.pkce); } catch { /* ignore */ }
+  const back = (stash && stash.back) || '#/saved';
+  if (qs.has('code') && stash && stash.state === qs.get('state')) {
+    try {
+      spStore(await spToken({
+        grant_type: 'authorization_code', code: qs.get('code'), redirect_uri: spRedirect(),
+        client_id: SPOTIFY_CLIENT_ID, code_verifier: stash.verifier,
+      }));
+      try { const me = await spApi('GET', 'me'); sp.name = (me && (me.display_name || me.id)) || ''; store.set(K.spotify, sp); } catch { /* name is optional */ }
+      startupToast = 'Spotify connected';
+    } catch { startupToast = 'Spotify sign-in didn’t complete. Try again.'; }
+  } else {
+    startupToast = 'Spotify sign-in was cancelled.';
+  }
+  history.replaceState(null, '', location.pathname + back);
+}
+
+let refreshing = null;
+async function spAccess() {
+  if (!sp) throw Object.assign(new Error('not-connected'), { status: 0 });
+  if (Date.now() < sp.exp) return sp.access;
+  if (!refreshing) {
+    refreshing = spToken({ grant_type: 'refresh_token', refresh_token: sp.refresh, client_id: SPOTIFY_CLIENT_ID })
+      .then(spStore)
+      .catch(e => { if (e.status === 400 || e.status === 401) spDisconnect(); throw e; })
+      .finally(() => { refreshing = null; });
+  }
+  await refreshing;
+  return sp.access;
+}
+
+async function spApi(method, path, params) {
+  const token = await spAccess();
+  const r = await fetch('https://api.spotify.com/v1/' + path + (params ? '?' + new URLSearchParams(params) : ''), {
+    method, headers: { Authorization: 'Bearer ' + token },
+  });
+  if (r.status === 401) spDisconnect();
+  if (!r.ok) throw Object.assign(new Error('spotify'), { status: r.status });
+  const text = await r.text();
+  try { return text ? JSON.parse(text) : null; } catch { return null; }
+}
+
+function spError(e) {
+  const s = e && e.status;
+  if (s === 403) return 'Spotify refused. The Spotify app’s owner needs Premium, and your account must be on its user list.';
+  if (s === 401 || s === 400 || s === 0) return 'Spotify needs you to connect again.';
+  if (s === 429) return 'Spotify is busy. Try again in a moment.';
+  return 'Couldn’t reach Spotify.';
+}
+
+const cleanTitle = title => String(title).replace(/\s*[([].*?[)\]]/g, '').replace(/\s-\s.*$/, '').trim() || String(title);
+const norm = s => {
+  const n = cleanTitle(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+  return n || String(s).toLowerCase().trim();
+};
+
+// Remember what we learn about a song (its Spotify id, Apple link) on the saved copy too.
+function remember(t) {
+  const s = saved.tracks.find(x => x.id === t.id);
+  if (!s) return;
+  if (s !== t) for (const k of ['isrc', 'spotifyId', 'appleUrl', 'liked']) if (t[k] !== undefined) s[k] = t[k];
+  store.set(K.saved, saved);
+}
+
+async function spFind(t) {
+  if (t.spotifyId !== undefined) return t.spotifyId;
+  if (t.isrc === undefined) {
+    try { t.isrc = (await dz('track/' + t.id)).isrc || ''; } catch { /* fall back to a name search */ }
+  }
+  let item = null;
+  if (t.isrc) {
+    const r = await spApi('GET', 'search', { q: 'isrc:' + t.isrc, type: 'track', limit: 1 });
+    item = r && r.tracks && r.tracks.items[0];
+  }
+  if (!item) {
+    const r = await spApi('GET', 'search', { q: `track:${cleanTitle(t.title)} artist:${t.artist.name}`, type: 'track', limit: 1 });
+    item = r && r.tracks && r.tracks.items[0];
+  }
+  t.spotifyId = item ? item.id : '';
+  remember(t);
+  return t.spotifyId;
+}
+
+async function spLike(t) {
+  const id = await spFind(t);
+  if (!id) return 'missing';
+  await spApi('PUT', 'me/library', { uris: 'spotify:track:' + id });
+  t.liked = true;
+  remember(t);
+  return 'ok';
+}
+
+function autoLike(t) {
+  if (!sp || !prefs.autoLike) return;
+  spLike(t)
+    .then(res => {
+      if (sheetTrack && sheetTrack.id === t.id) { sheetTrack.liked = t.liked; sheetTrack.spotifyId = t.spotifyId; renderSheet(); }
+      toast(res === 'ok' ? 'Saved, and added to your Spotify Liked Songs' : 'Saved here. Couldn’t find it on Spotify.');
+    })
+    .catch(e => { toast('Saved here. ' + spError(e)); if (routeName === 'saved' && !sp) renderRoute(); });
+}
+
+async function spLikeAll() {
+  const todo = saved.tracks.slice();
+  if (!todo.length) return;
+  toast(`Matching ${todo.length} song${todo.length === 1 ? '' : 's'} on Spotify…`);
+  const uris = [];
+  let missing = 0;
+  try {
+    for (const t of todo) {
+      const id = await spFind(t);
+      if (id) uris.push('spotify:track:' + id); else missing++;
+    }
+    for (let i = 0; i < uris.length; i += 40) await spApi('PUT', 'me/library', { uris: uris.slice(i, i + 40).join(',') });
+  } catch (e) {
+    toast(spError(e));
+    if (routeName === 'saved' && !sp) renderRoute();
+    return;
+  }
+  todo.forEach(t => { if (t.spotifyId) t.liked = true; });
+  store.set(K.saved, saved);
+  toast(`Added ${uris.length} to your Liked Songs` + (missing ? `, ${missing} not found on Spotify` : ''));
+}
+
+async function appleFind(t) {
+  if (t.appleUrl !== undefined) return t.appleUrl;
+  const term = `${t.artist.name} ${cleanTitle(t.title)}`;
+  const country = ((navigator.language || '').split('-')[1] || 'us').toLowerCase();
+  const run = async (c, query) => {
+    const r = await fetch('https://itunes.apple.com/search?' + new URLSearchParams({ entity: 'song', limit: '25', country: c, ...query }));
+    if (!r.ok) throw new Error('itunes');
+    return (await r.json()).results || [];
+  };
+  let results, store_ = country;
+  try { results = await run(country, { term }); }
+  catch (e) { if (country === 'us') throw e; store_ = 'us'; results = await run('us', { term }); }
+  // Prefer the same recording: an identical title beats one that only matches once "(Live)", "(Acoustic)" and the like are stripped.
+  const wantArtist = norm(t.artist.name), wantTitle = norm(t.title);
+  const plain = s => String(s).toLowerCase().trim();
+  const hasVersion = s => /[([]|\s-\s/.test(s);
+  const pick = list => {
+    let found = null, top = 0;
+    for (const r of list) {
+      const name = r.trackName || '';
+      const a = norm(r.artistName || ''), n = norm(name);
+      if (!(a === wantArtist || a.includes(wantArtist) || wantArtist.includes(a))) continue;
+      let score = 0;
+      if (plain(name) === plain(t.title)) score = 4;
+      else if (n === wantTitle) score = hasVersion(name) && !hasVersion(t.title) ? 1 : 3;
+      if (score > top) { found = r; top = score; }
+    }
+    return top >= 3 ? found : null; // a different version is worse than honest search results
+  };
+  let best = pick(results);
+  if (!best) { // second try: search by song title alone, then filter to the artist
+    try { best = pick(await run(store_, { term: cleanTitle(t.title), attribute: 'songTerm', limit: '50' })); } catch { /* keep the search link */ }
+  }
+  t.appleUrl = best && best.trackViewUrl ? best.trackViewUrl.replace(/&uo=\d+/, '') : '';
+  remember(t);
+  return t.appleUrl;
+}
+
+/* ---------- the song sheet: save, like, and open elsewhere ---------- */
+const sheet = $('#sheet');
+let sheetTrack = null;
+let sheetSeq = 0;
+let sheetBusy = false;
+
+function renderSheet() {
+  const t = sheetTrack;
+  if (!t) return;
+  const q = encodeURIComponent(`${t.artist.name} ${cleanTitle(t.title)}`);
+  const spotifyUrl = t.spotifyId ? 'https://open.spotify.com/track/' + t.spotifyId : 'https://open.spotify.com/search/' + q;
+  const appleUrl = t.appleUrl || 'https://music.apple.com/search?term=' + q;
+  const hint = (exact, pending) => exact ? 'Exact song' : pending ? 'Finding it…' : 'Search';
+  const savedNow = isTrackSaved(t.id);
+  const likeBtn = !sp
+    ? `<button class="btn" type="button" data-action="sp-connect">Connect Spotify to add to Liked Songs</button>`
+    : t.liked
+      ? `<button class="btn btn--primary" type="button" disabled>${ic('check')} In your Spotify Liked Songs</button>`
+      : `<button class="btn btn--primary" type="button" data-action="sp-like">${ic('plus')} Add to Spotify Liked Songs</button>`;
+  sheet.innerHTML = `
+    <div class="sheet__head">
+      <img src="${esc(t.coverBig || t.cover)}" alt="" width="64" height="64">
+      <div><strong>${esc(t.title)}</strong><span>${esc(t.artist.name)}</span></div>
+      <button class="iconbtn" type="button" data-action="close-sheet" aria-label="Close">${ic('x')}</button>
+    </div>
+    <div class="sheet__actions">
+      ${likeBtn}
+      <button class="btn" type="button" data-action="save-track" data-id="${t.id}" aria-pressed="${savedNow}">${ic('heart')}<span>${savedNow ? 'Saved' : 'Save for later'}</span></button>
+    </div>
+    <p class="eyebrow">Open the full song in</p>
+    <div class="sheet__links">
+      <a class="svc" href="${esc(spotifyUrl)}" target="_blank" rel="noopener"><b>Spotify</b><small>${hint(!!t.spotifyId, sheetBusy && !!sp)}</small></a>
+      <a class="svc" href="${esc(appleUrl)}" target="_blank" rel="noopener"><b>Apple Music</b><small>${hint(!!t.appleUrl, sheetBusy)}</small></a>
+      <a class="svc" href="${esc(t.link)}" target="_blank" rel="noopener"><b>Deezer</b><small>Exact song</small></a>
+    </div>
+    <a class="link" href="#/artist/${t.artist.id}" data-action="close-sheet">Go to ${esc(t.artist.name)}</a>`;
+}
+
+function openSheet(t) {
+  knownTracks.set(t.id, t);
+  sheetTrack = t;
+  const seq = ++sheetSeq;
+  sheetBusy = true;
+  renderSheet();
+  if (!sheet.open) { if (sheet.showModal) sheet.showModal(); else sheet.setAttribute('open', ''); }
+  const jobs = [appleFind(t).catch(() => {})];
+  if (sp) {
+    jobs.push(spFind(t)
+      .then(id => id ? spApi('GET', 'me/library/contains', { uris: 'spotify:track:' + id }) : null)
+      .then(r => { if (r) t.liked = !!r[0]; })
+      .catch(() => {}));
+  }
+  Promise.all(jobs).then(() => {
+    if (seq !== sheetSeq) return;
+    sheetBusy = false;
+    if (sheet.open) renderSheet();
+  });
+}
+sheet.addEventListener('click', e => { if (e.target === sheet) sheet.close(); });
 
 /* ================= trail + map data ================= */
 function updateTrail(a, hop) {
@@ -597,19 +878,36 @@ function viewSaved(tab) {
     : (saved.tracks.length
         ? `<div class="rowactions">
              <button class="btn btn--primary" type="button" data-action="play-list" data-list="${list}">${ic('play')} Play all snippets</button>
+             ${sp ? `<button class="btn" type="button" data-action="sp-like-all">${ic('plus')} Add all to Spotify Liked Songs</button>` : ''}
              <button class="btn" type="button" data-action="copy-saved">${ic('copy')} Copy list</button>
            </div>
            <ol class="tracks">${saved.tracks.map((t, i) => trackRow(t, list, i, { savedView: true })).join('')}</ol>`
         : `<div class="empty"><h2>Nothing saved yet</h2><p>Tap the heart on any song while you explore. It lands here, along with the trail that led you to it.</p><a class="btn btn--primary" href="#/">Start exploring</a></div>`);
   view.innerHTML = `
     <section class="pagehead">
-      <div><h1>Saved for later</h1><p>Kept on this device. Open any song in full on Deezer when you’re ready for more than a snippet.</p></div>
+      <div><h1>Saved for later</h1><p>Kept on this device. Tap ⋯ on any song to open it in full on Spotify, Apple Music or Deezer.</p></div>
       <div class="seg">
         <a href="#/saved"${showArtists ? '' : ' aria-current="page"'}>Songs · ${saved.tracks.length}</a>
         <a href="#/saved/artists"${showArtists ? ' aria-current="page"' : ''}>Artists · ${saved.artists.length}</a>
       </div>
     </section>
-    ${body}`;
+    ${sp ? body : ''}
+    <section class="connect" aria-label="Music services"${sp ? ' style="margin-top:32px"' : ''}>
+      <div class="connect__row">
+        <h2>Spotify</h2>
+        ${sp
+          ? `<p><strong>Connected${sp.name ? ' as ' + esc(sp.name) : ''}.</strong></p>
+             <label class="check"><input type="checkbox" data-action="toggle-autolike"${prefs.autoLike ? ' checked' : ''}> Hearting a song also adds it to Liked Songs</label>
+             <button class="link" type="button" data-action="sp-disconnect">Disconnect</button>`
+          : `<p>Connect once, and every song you heart here goes straight into your Liked Songs.</p>
+             <button class="btn btn--primary" type="button" data-action="sp-connect">Connect Spotify</button>`}
+      </div>
+      <div class="connect__row">
+        <h2>Apple Music</h2>
+        <p>Each song’s ⋯ menu opens the exact track in Apple Music, one tap from adding it there. Apple only lets apps with a paid developer membership add to your library directly.</p>
+      </div>
+    </section>
+    ${sp ? '' : body}`;
 }
 
 function viewMap() {
@@ -734,7 +1032,7 @@ async function renderRoute() {
   if (alive()) syncPlaying();
 }
 
-window.addEventListener('hashchange', () => { window.scrollTo(0, 0); renderRoute(); });
+window.addEventListener('hashchange', () => { if (sheet.open) sheet.close(); window.scrollTo(0, 0); renderRoute(); });
 let resizeTimer;
 window.addEventListener('resize', () => { if (routeName !== 'map') return; clearTimeout(resizeTimer); resizeTimer = setTimeout(drawMap, 200); });
 
@@ -853,6 +1151,27 @@ const actions = {
     const a = knownArtists.get(id) || saved.artists.find(x => x.id === id);
     if (a) toggleSaveArtist(a);
   },
+  'song-menu'(b) {
+    const id = +b.dataset.id;
+    const t = knownTracks.get(id) || saved.tracks.find(x => x.id === id);
+    if (t) openSheet(t);
+  },
+  'player-song'() { if (P.track) openSheet(P.track); },
+  'close-sheet'() { if (sheet.open) sheet.close(); },
+  'sp-connect'() { spConnect(); },
+  'sp-disconnect'() { spDisconnect(); toast('Spotify disconnected'); renderRoute(); },
+  'toggle-autolike'(b) { prefs.autoLike = b.checked; store.set(K.prefs, prefs); },
+  'sp-like-all'() { spLikeAll(); },
+  async 'sp-like'(b) {
+    const t = sheetTrack;
+    if (!t) return;
+    b.disabled = true;
+    try {
+      const res = await spLike(t);
+      toast(res === 'ok' ? 'Added to your Spotify Liked Songs' : 'Couldn’t find this song on Spotify.');
+    } catch (e) { toast(spError(e)); }
+    if (sheetTrack === t && sheet.open) renderSheet();
+  },
   'blend'(b) { openPicker(+b.dataset.id); },
   'pick'(b) { pickBlend(+b.dataset.id); },
   'close-picker'() { picker.close(); },
@@ -921,6 +1240,9 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
 
 /* ================= go ================= */
 updateSavedCount();
-renderRoute();
+spFinishSignIn()
+  .catch(() => {})
+  .then(() => renderRoute())
+  .then(() => { if (startupToast) toast(startupToast); });
 
 })();

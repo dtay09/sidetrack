@@ -1,5 +1,5 @@
 // Keeps the app shell available offline. Music data and audio always come from the network.
-const CACHE = 'sidetrack-v1';
+const CACHE = 'sidetrack-v2';
 const SHELL = [
   './',
   'index.html',
@@ -26,12 +26,14 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   const req = event.request;
   if (req.method !== 'GET') return;
-  if (new URL(req.url).origin !== self.location.origin) return;
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return;
   // Network first so updates show up straight away; fall back to the saved copy when offline.
+  // Addresses with a query (such as the Spotify sign-in return) are never stored.
   event.respondWith(
     fetch(req)
       .then(res => {
-        if (res.ok) { const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)); }
+        if (res.ok && !url.search) { const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)); }
         return res;
       })
       .catch(() => caches.match(req, { ignoreSearch: true }).then(hit => hit || caches.match('index.html')))
