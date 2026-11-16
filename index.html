@@ -18,6 +18,10 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=Instrument+Sans:wght@400..700&display=swap">
 <link rel="stylesheet" href="styles.css">
+<script>
+  // Apply a chosen light/dark theme before the page paints, so it never flashes the other one.
+  try { var p = JSON.parse(localStorage.getItem('sidetrack.prefs.v1') || '{}'); if (p.theme === 'light' || p.theme === 'dark') document.documentElement.dataset.theme = p.theme; } catch (e) {}
+</script>
 </head>
 <body>
 
@@ -46,6 +50,10 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.3s-7.6-4.5-7.6-10.2a4.2 4.2 0 0 1 7.6-2.5 4.2 4.2 0 0 1 7.6 2.5c0 5.700-7.6 10.200-7.6 10.200z" fill="none" stroke="currentColor" stroke-width="1.900" stroke-linejoin="round"/></svg>
       <span>Saved</span>
       <b id="savedCount" hidden></b>
+    </a>
+    <a href="#/settings" data-tab="settings">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h8m6 0h2M4 16h2m6 0h8" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/><circle cx="15" cy="8" r="2.6" fill="none" stroke="currentColor" stroke-width="1.9"/><circle cx="9" cy="16" r="2.6" fill="none" stroke="currentColor" stroke-width="1.9"/></svg>
+      <span>Settings</span>
     </a>
   </nav>
 </header>

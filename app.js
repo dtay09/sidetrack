@@ -305,7 +305,7 @@ function toggle() {
 
 audio.addEventListener('playing', () => { if (!P.live) return; P.loading = false; renderPlayer(); });
 audio.addEventListener('pause', () => renderPlayer());
-audio.addEventListener('ended', () => { if (P.live) next(); });
+audio.addEventListener('ended', () => { if (!P.live) return; if (prefs.autoNext) next(); else renderPlayer(); });
 audio.addEventListener('timeupdate', () => {
   if (!P.live) return;
   const d = audio.duration && isFinite(audio.duration) ? audio.duration : 30;
@@ -413,7 +413,7 @@ function afterSaveChange() {
 const SPOTIFY_CLIENT_ID = '45c7a67141d948eb89815b97d4e5f4ec';
 const SP_SCOPES = 'user-library-modify user-library-read';
 let sp = store.get(K.spotify, null);            // { access, refresh, exp, name }
-let prefs = store.get(K.prefs, { autoLike: true });
+let prefs = { autoLike: true, autoNext: true, theme: 'system', service: 'spotify', appleCountry: 'auto', ...store.get(K.prefs, {}) };
 let startupToast = '';
 
 const spRedirect = () => location.origin + location.pathname.replace(/index\.html$/, '');
@@ -425,7 +425,7 @@ async function spConnect() {
   if (location.protocol !== 'https:' && location.hostname !== '127.0.0.1') { toast('Spotify sign-in only works on the live site.'); return; }
   const verifier = randomString(64), state = randomString(16);
   const challenge = b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
-  store.set(K.pkce, { verifier, state, back: location.hash || '#/saved' });
+  store.set(K.pkce, { verifier, state, back: location.hash || '#/settings' });
   location.assign('https://accounts.spotify.com/authorize?' + new URLSearchParams({
     client_id: SPOTIFY_CLIENT_ID, response_type: 'code', redirect_uri: spRedirect(),
     code_challenge_method: 'S256', code_challenge: challenge, state, scope: SP_SCOPES,
@@ -456,7 +456,7 @@ async function spFinishSignIn() {
   if (!qs.has('code') && !qs.has('error')) return;
   const stash = store.get(K.pkce, null);
   try { localStorage.removeItem(K.pkce); } catch { /* ignore */ }
-  const back = (stash && stash.back) || '#/saved';
+  const back = (stash && stash.back) || '#/settings';
   if (qs.has('code') && stash && stash.state === qs.get('state')) {
     try {
       spStore(await spToken({
@@ -582,7 +582,9 @@ async function spLikeAll() {
 async function appleFind(t) {
   if (t.appleUrl !== undefined) return t.appleUrl;
   const term = `${t.artist.name} ${cleanTitle(t.title)}`;
-  const country = ((navigator.language || '').split('-')[1] || 'us').toLowerCase();
+  const country = prefs.appleCountry && prefs.appleCountry !== 'auto'
+    ? prefs.appleCountry
+    : ((navigator.language || '').split('-')[1] || 'us').toLowerCase();
   const run = async (c, query) => {
     const r = await fetch('https://itunes.apple.com/search?' + new URLSearchParams({ entity: 'song', limit: '25', country: c, ...query }));
     if (!r.ok) throw new Error('itunes');
@@ -648,9 +650,14 @@ function renderSheet() {
     </div>
     <p class="eyebrow">Open the full song in</p>
     <div class="sheet__links">
-      <a class="svc" href="${esc(spotifyUrl)}" target="_blank" rel="noopener"><b>Spotify</b><small>${hint(!!t.spotifyId, sheetBusy && !!sp)}</small></a>
-      <a class="svc" href="${esc(appleUrl)}" target="_blank" rel="noopener"><b>Apple Music</b><small>${hint(!!t.appleUrl, sheetBusy)}</small></a>
-      <a class="svc" href="${esc(t.link)}" target="_blank" rel="noopener"><b>Deezer</b><small>Exact song</small></a>
+      ${[prefs.service, 'spotify', 'apple', 'deezer'].filter((k, i, all) => all.indexOf(k) === i).map((k, i) => {
+        const s = {
+          spotify: [spotifyUrl, 'Spotify', hint(!!t.spotifyId, sheetBusy && !!sp)],
+          apple: [appleUrl, 'Apple Music', hint(!!t.appleUrl, sheetBusy)],
+          deezer: [t.link, 'Deezer', 'Exact song'],
+        }[k];
+        return s ? `<a class="svc${i === 0 ? ' svc--pref' : ''}" href="${esc(s[0])}" target="_blank" rel="noopener"><b>${s[1]}</b><small>${s[2]}</small></a>` : '';
+      }).join('')}
     </div>
     <a class="link" href="#/artist/${t.artist.id}" data-action="close-sheet">Go to ${esc(t.artist.name)}</a>`;
 }
@@ -891,23 +898,116 @@ function viewSaved(tab) {
         <a href="#/saved/artists"${showArtists ? ' aria-current="page"' : ''}>Artists · ${saved.artists.length}</a>
       </div>
     </section>
-    ${sp ? body : ''}
-    <section class="connect" aria-label="Music services"${sp ? ' style="margin-top:32px"' : ''}>
-      <div class="connect__row">
-        <h2>Spotify</h2>
-        ${sp
-          ? `<p><strong>Connected${sp.name ? ' as ' + esc(sp.name) : ''}.</strong></p>
-             <label class="check"><input type="checkbox" data-action="toggle-autolike"${prefs.autoLike ? ' checked' : ''}> Hearting a song also adds it to Liked Songs</label>
-             <button class="link" type="button" data-action="sp-disconnect">Disconnect</button>`
-          : `<p>Connect once, and every song you heart here goes straight into your Liked Songs.</p>
-             <button class="btn btn--primary" type="button" data-action="sp-connect">Connect Spotify</button>`}
-      </div>
-      <div class="connect__row">
-        <h2>Apple Music</h2>
-        <p>Each song’s ⋯ menu opens the exact track in Apple Music, one tap from adding it there. Apple only lets apps with a paid developer membership add to your library directly.</p>
-      </div>
-    </section>
-    ${sp ? '' : body}`;
+    ${sp ? '' : `<p class="savedhint">Want hearts to land in your Spotify Liked Songs too? <a class="link" href="#/settings">Connect Spotify in Settings</a></p>`}
+    ${body}`;
+}
+
+/* ---------- settings ---------- */
+const COUNTRIES = [
+  ['auto', 'Automatic'], ['au', 'Australia'], ['at', 'Austria'], ['be', 'Belgium'], ['br', 'Brazil'], ['ca', 'Canada'],
+  ['dk', 'Denmark'], ['fi', 'Finland'], ['fr', 'France'], ['de', 'Germany'], ['in', 'India'], ['ie', 'Ireland'],
+  ['it', 'Italy'], ['jp', 'Japan'], ['mx', 'Mexico'], ['nl', 'Netherlands'], ['nz', 'New Zealand'], ['no', 'Norway'],
+  ['pl', 'Poland'], ['pt', 'Portugal'], ['za', 'South Africa'], ['kr', 'South Korea'], ['es', 'Spain'], ['se', 'Sweden'],
+  ['ch', 'Switzerland'], ['gb', 'United Kingdom'], ['us', 'United States'],
+];
+
+function viewSettings() {
+  document.title = 'Settings · Sidetrack';
+  const row = (title, desc, control = '') =>
+    `<div class="set__row"><div class="set__text"><strong>${title}</strong>${desc ? `<span>${desc}</span>` : ''}</div>${control}</div>`;
+  const seg = (key, options) => `<div class="seg" role="group">${options.map(([v, label]) =>
+    `<button type="button" data-action="set-pref" data-key="${key}" data-value="${v}" aria-pressed="${prefs[key] === v}">${label}</button>`).join('')}</div>`;
+  const sw = (key, label, disabled) =>
+    `<label class="switch"><input type="checkbox" data-action="toggle-pref" data-key="${key}" aria-label="${label}"${prefs[key] ? ' checked' : ''}${disabled ? ' disabled' : ''}><i></i></label>`;
+  const visited = Object.values(graph.nodes).filter(n => n.v).length;
+  const nSaved = saved.tracks.length + saved.artists.length;
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+  view.innerHTML = `
+    <section class="pagehead"><div><h1>Settings</h1></div></section>
+    <div class="settings">
+      <section class="set">
+        <h2>Connections</h2>
+        ${row('Spotify', sp ? `Connected${sp.name ? ' as ' + esc(sp.name) : ''} on this device.` : 'Connect once on this device and the songs you heart can go straight into your Liked Songs.',
+          sp ? `<button class="btn" type="button" data-action="sp-disconnect">Disconnect</button>`
+             : `<button class="btn btn--primary" type="button" data-action="sp-connect">Connect Spotify</button>`)}
+        ${row('Add hearted songs to Liked Songs', sp ? 'Removing a heart here never removes the song from Spotify.' : 'Available once Spotify is connected.',
+          sw('autoLike', 'Add hearted songs to Liked Songs', !sp))}
+        ${row('Apple Music', 'Song menus open the exact track in Apple Music. Apple only lets apps with a paid developer membership add to your library directly.')}
+      </section>
+
+      <section class="set">
+        <h2>Listening</h2>
+        ${row('Preferred music app', 'Shown first when you open a song in full.', seg('service', [['spotify', 'Spotify'], ['apple', 'Apple Music'], ['deezer', 'Deezer']]))}
+        ${row('Keep playing', 'When a snippet ends, play the next one in the list.', sw('autoNext', 'Keep playing the next snippet'))}
+        ${row('Apple Music region', 'Which country’s Apple Music catalogue the links point to.',
+          `<select class="select" data-change="apple-country" aria-label="Apple Music region">${COUNTRIES.map(([v, label]) => `<option value="${v}"${prefs.appleCountry === v ? ' selected' : ''}>${label}</option>`).join('')}</select>`)}
+      </section>
+
+      <section class="set">
+        <h2>Appearance</h2>
+        ${row('Theme', '', seg('theme', [['system', 'Match device'], ['light', 'Light'], ['dark', 'Dark']]))}
+      </section>
+
+      <section class="set">
+        <h2>Your data</h2>
+        ${row('Saved list', `${plural(saved.tracks.length, 'song')} and ${plural(saved.artists.length, 'artist')}, kept on this device only. A backup file lets you move them to another device.`,
+          `<div class="set__btns"><button class="btn" type="button" data-action="export-saved"${nSaved ? '' : ' disabled'}>Back up</button>
+           <button class="btn" type="button" data-action="import-saved">Restore</button>
+           <input type="file" id="importFile" accept="application/json,.json" data-change="import-file" hidden></div>`)}
+        ${row('Trail', trail.length ? `${plural(trail.length, 'stop')}, ending at ${esc(trail[trail.length - 1].name)}.` : 'Empty.',
+          `<button class="btn" type="button" data-action="clear-trail"${trail.length ? '' : ' disabled'}>Clear trail</button>`)}
+        ${row('Map', visited ? `${plural(visited, 'artist')} visited.` : 'Empty.',
+          `<button class="btn" type="button" data-action="clear-map"${visited ? '' : ' disabled'}>Clear map</button>`)}
+        ${row('Clear saved list', 'Removes every saved song and artist from this device. Your Spotify library is not touched.',
+          `<button class="btn" type="button" data-action="clear-saved"${nSaved ? '' : ' disabled'}>Clear saved</button>`)}
+      </section>
+
+      <section class="set">
+        <h2>App</h2>
+        ${row('Install Sidetrack', installEvent ? 'Add it to this device as its own app.' : 'On a phone, use your browser’s “Add to Home screen”. If it is already installed, you’re set.',
+          installEvent ? `<button class="btn" type="button" data-action="install">${ic('install')} Install</button>` : '')}
+        ${row('About', 'Artist data and 30-second snippets come from Deezer. Apple Music links use Apple’s public lookup. Sidetrack has no server of its own.')}
+      </section>
+    </div>`;
+}
+
+function applyTheme() {
+  if (prefs.theme === 'light' || prefs.theme === 'dark') document.documentElement.dataset.theme = prefs.theme;
+  else delete document.documentElement.dataset.theme;
+}
+
+async function importSaved(file) {
+  let data;
+  try { data = JSON.parse(await file.text()); } catch { toast('That file isn’t a Sidetrack backup.'); return; }
+  // Backups are plain files anyone could edit, so only known fields with safe values are taken from them.
+  const https = u => (typeof u === 'string' && /^https:\/\//.test(u) ? u.slice(0, 500) : '');
+  const str = (v, max = 300) => (typeof v === 'string' ? v.slice(0, max) : '');
+  const int = v => (Number.isSafeInteger(v) && v > 0 ? v : 0);
+  const via = v => (Array.isArray(v) ? v.map(x => str(x, 100)).filter(Boolean).slice(0, 4) : []);
+  let songs = 0, artists = 0;
+  for (const t of (Array.isArray(data && data.tracks) ? data.tracks : []).slice(0, 5000)) {
+    const id = int(t && t.id), aid = int(t && t.artist && t.artist.id);
+    if (!id || !aid || !str(t.title) || isTrackSaved(id)) continue;
+    const item = {
+      id, title: str(t.title), artist: { id: aid, name: str(t.artist.name) }, album: str(t.album),
+      cover: https(t.cover), coverBig: https(t.coverBig), preview: '', link: 'https://www.deezer.com/track/' + id,
+      at: 0, savedAt: int(t.savedAt) || Date.now(), via: via(t.via),
+    };
+    if (typeof t.spotifyId === 'string' && /^[A-Za-z0-9]{10,40}$/.test(t.spotifyId)) item.spotifyId = t.spotifyId;
+    saved.tracks.push(item);
+    songs++;
+  }
+  for (const a of (Array.isArray(data && data.artists) ? data.artists : []).slice(0, 5000)) {
+    const id = int(a && a.id);
+    if (!id || !str(a.name) || isArtistSaved(id)) continue;
+    saved.artists.push({ id, name: str(a.name), pic: https(a.pic), picBig: https(a.picBig), fans: int(a.fans), savedAt: int(a.savedAt) || Date.now(), via: via(a.via) });
+    artists++;
+  }
+  if (!songs && !artists) { toast('Nothing new in that backup.'); return; }
+  persistSaved();
+  renderRoute();
+  toast(`Restored ${songs} song${songs === 1 ? '' : 's'} and ${artists} artist${artists === 1 ? '' : 's'}`);
 }
 
 function viewMap() {
@@ -1018,13 +1118,14 @@ async function renderRoute() {
   lists.clear();
   current = null;
   closeSearch();
-  const tab = name === 'saved' ? 'saved' : name === 'map' ? 'map' : 'discover';
+  const tab = name === 'saved' ? 'saved' : name === 'map' ? 'map' : name === 'settings' ? 'settings' : 'discover';
   $$('.tabs a').forEach(t => t.dataset.tab === tab ? t.setAttribute('aria-current', 'page') : t.removeAttribute('aria-current'));
   try {
     if (name === 'artist' && +a) await viewArtist(+a, alive, hop);
     else if (name === 'blend' && +a && +b) await viewBlend(+a, +b, alive);
     else if (name === 'saved') viewSaved(a);
     else if (name === 'map') viewMap();
+    else if (name === 'settings') viewSettings();
     else await viewHome(alive);
   } catch (e) {
     if (alive()) viewError(e);
@@ -1160,7 +1261,31 @@ const actions = {
   'close-sheet'() { if (sheet.open) sheet.close(); },
   'sp-connect'() { spConnect(); },
   'sp-disconnect'() { spDisconnect(); toast('Spotify disconnected'); renderRoute(); },
-  'toggle-autolike'(b) { prefs.autoLike = b.checked; store.set(K.prefs, prefs); },
+  'toggle-pref'(b) { prefs[b.dataset.key] = b.checked; store.set(K.prefs, prefs); },
+  'set-pref'(b) {
+    prefs[b.dataset.key] = b.dataset.value;
+    store.set(K.prefs, prefs);
+    applyTheme();
+    $$(`[data-action="set-pref"][data-key="${b.dataset.key}"]`).forEach(x => x.setAttribute('aria-pressed', x === b));
+  },
+  'export-saved'() {
+    const blob = new Blob([JSON.stringify({ app: 'sidetrack', version: 1, exported: new Date().toISOString(), tracks: saved.tracks, artists: saved.artists }, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `sidetrack-saved-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    toast('Backup file downloaded');
+  },
+  'import-saved'() { const f = $('#importFile'); if (f) f.click(); },
+  'clear-saved'() {
+    const before = saved;
+    if (!before.tracks.length && !before.artists.length) return;
+    saved = { tracks: [], artists: [] };
+    persistSaved();
+    renderRoute();
+    toast('Saved list cleared', { label: 'Undo', run: () => { saved = before; persistSaved(); renderRoute(); } });
+  },
   'sp-like-all'() { spLikeAll(); },
   async 'sp-like'(b) {
     const t = sheetTrack;
@@ -1180,8 +1305,16 @@ const actions = {
     loadGenre(+b.dataset.id);
   },
   'focus-search'() { window.scrollTo({ top: 0 }); q.focus(); },
-  'clear-trail'() { trail = []; store.set(K.trail, trail); renderRoute(); },
-  'clear-map'() { graph = { nodes: {}, edges: [] }; store.set(K.graph, graph); renderRoute(); },
+  'clear-trail'() {
+    const before = trail;
+    trail = []; store.set(K.trail, trail); renderRoute();
+    toast('Trail cleared', { label: 'Undo', run: () => { trail = before; store.set(K.trail, trail); renderRoute(); } });
+  },
+  'clear-map'() {
+    const before = graph;
+    graph = { nodes: {}, edges: [] }; store.set(K.graph, graph); renderRoute();
+    toast('Map cleared', { label: 'Undo', run: () => { graph = before; store.set(K.graph, graph); renderRoute(); } });
+  },
   'retry'() { renderRoute(); },
   'player-toggle'() { unlock(); toggle(); },
   'player-next'() { unlock(); next(); },
@@ -1231,7 +1364,28 @@ function showInstall() {
   const b = $('#installBtn');
   if (b) b.hidden = !installEvent;
 }
-window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvent = e; showInstall(); });
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvent = e; showInstall(); if (routeName === 'settings') renderRoute(); });
+
+// A picture that fails to load (or was never known) leaves its grey placeholder instead of a broken-image icon.
+document.addEventListener('error', e => { if (e.target.tagName === 'IMG') e.target.style.visibility = 'hidden'; }, true);
+document.addEventListener('load', e => { if (e.target.tagName === 'IMG') e.target.style.visibility = ''; }, true);
+
+document.addEventListener('change', e => {
+  const t = e.target;
+  if (!t.dataset) return;
+  if (t.dataset.change === 'apple-country') {
+    prefs.appleCountry = t.value;
+    store.set(K.prefs, prefs);
+    // links already looked up belong to the old region, so forget them
+    knownTracks.forEach(x => { delete x.appleUrl; });
+    saved.tracks.forEach(x => { delete x.appleUrl; });
+    store.set(K.saved, saved);
+    toast('Apple Music region updated');
+  } else if (t.dataset.change === 'import-file' && t.files && t.files[0]) {
+    importSaved(t.files[0]);
+    t.value = '';
+  }
+});
 window.addEventListener('appinstalled', () => { installEvent = null; showInstall(); toast('Sidetrack is installed'); });
 
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
@@ -1239,6 +1393,7 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
 }
 
 /* ================= go ================= */
+applyTheme();
 updateSavedCount();
 spFinishSignIn()
   .catch(() => {})
